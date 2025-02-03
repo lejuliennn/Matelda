@@ -369,3 +369,7 @@ def domain_based_folding(configs, pool):
 
     logging.info("Domain-based folding completed")    
     return table_grouping_dict, table_size_dict
+
+
+def quality_based_folding(configs, pool):
+    pass

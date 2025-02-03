@@ -200,6 +200,8 @@ def main(execution):
     ##########################################
     # ToDo: here is the end of column grouping 
     ##########################################
+    # Below is the quality based folding  
+    ##########################################
 
     logging.info("Starting error detection")
 
