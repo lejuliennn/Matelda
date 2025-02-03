@@ -18,6 +18,9 @@ from marshmallow_pipeline.utils.loading_results import \
     loading_columns_grouping_results
 
 def main(execution):
+    ########################################
+    # init
+    #######################################
     configs = ConfigParser()
     configs.read("./config.ini")
     labeling_budget = int(configs["EXPERIMENTS"]["labeling_budget"])
@@ -103,6 +106,15 @@ def main(execution):
     if save_mediate_res_on_disk:
         with open(os.path.join(experiment_output_path, "tables_dict.pickle"), "wb+") as handle:
             pickle.dump(tables_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    
+    # ToDo: until here its init -> make an init function out of it and call it in the notebook
+
+    #######################################
+    # Domain Based Folding
+    #######################################
+
+    # ToDo: Domain based folding (name it domanin based folding instead of table grouping)
+    # ToDo: checks doesn't have to be in the Notebook 
     # Table grouping
     if table_grouping_enabled:
         if not table_grouping_res_available:
@@ -112,6 +124,7 @@ def main(execution):
             before_tg = time.time()
             logging.debug("Thread pool: " + str(before_tg - time_start))
             table_g_start = time.time()
+            # ToDo: CALL table grouping 
             table_grouping_dict, table_size_dict = table_grouping(
                 aggregated_lake_path, experiment_output_path, table_grouping_method, save_mediate_res_on_disk, pool
             )
@@ -146,7 +159,9 @@ def main(execution):
     logging.info("I need at least 2 labeled cells per table group to work at all and at least 2 * 6 labeled cells per table group to work effectively! Thant means you need to label {} cells if you want reasonable (!) results:".format(2*6*len(table_grouping_dict)))
     print("I need at least 2 labeled cells per table group to work at all and at least 2 * 6 labeled cells per table group to work effectively! Thant means you need to label {} cells if you want reasonable (!) results:".format(2*6*len(table_grouping_dict)))
 
+    #######################################
     # Column grouping
+    #######################################
     if not column_grouping_res_available:
         logging.info("Column grouping results are not available")
         logging.info("Executing the column grouping")
@@ -182,7 +197,12 @@ def main(execution):
         column_groups_df_path,
     ) = loading_columns_grouping_results(table_grouping_dict, mediate_files_path)
 
+    ##########################################
+    # ToDo: here is the end of column grouping 
+    ##########################################
+
     logging.info("Starting error detection")
+
     # TODO: change output foldr of metanome
     (
         y_test_all,

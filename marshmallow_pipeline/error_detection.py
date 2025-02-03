@@ -23,6 +23,11 @@ if not sys.warnoptions:
 
     warnings.simplefilter("ignore")
 
+####################
+# ToDo: Remove notes
+# Note: Error Detector generates features for each cell 
+# (afterwards cell clustering and then sampling labeling)
+# We want to show user the cell fold
 def error_detector(
     cell_feature_generator_enabled,
     sandbox_path,
@@ -87,6 +92,7 @@ def error_detector(
         logging.debug("args: %s", str(args))
         # Use starmap to pass arguments as separate values
         results = []
+
         for x in col_group_file_names:
             results.append(cluster_column_group(col_groups_dir, df_n_labels, features_dict, labels_per_cell_group, x, n_cores))
         logging.info("Storing cluster_column_group results")
@@ -120,15 +126,38 @@ def error_detector(
             ) as pickle_file:
                 pickle.dump(cell_cluster_cells_dict_all, pickle_file)
     else:
+        ############################################
+        # ToDo: 
+        # Here is the part I have to show the user 
+        # Look into the dictionaries and find what we want to show the user
+        # Look into structure of pickle files before running the code and understand them
+        #
+        # -> In the Diagram (Draw.IO) it's Step 2 
+
         logging.info("Loading cell clustering results from disk")
         with open(
             os.path.join(output_path, "cell_clustering", "all_cell_clusters_records.pickle"), "rb"
         ) as pickle_file:
+            # look in dics -> find out which cells are there
             all_cell_clusters_records = pickle.load(pickle_file)
         with open(
             os.path.join(output_path, "cell_clustering", "cell_cluster_cells_dict_all.pickle"), "rb"
         ) as pickle_file:
+            # or this dict
             cell_cluster_cells_dict_all = pickle.load(pickle_file)
+
+        # Until here you can achive cluster resluts
+        #
+        # visualize this part until here (Step 2 in Diagram of DrawIO)
+        # call the error function from here directly or 
+        # create a new function for this in the pipeline.py file  
+        #
+        # when calling the function from directly here, maybe comment out the sampling / labeling
+        # part below. Makes implementation easier
+        ############################################
+
+    ###########################
+    # Next Week: Sampling / Labeling 
 
     logging.info("Sampling and labeling clusters")
     start_time = time.time()    
