@@ -15,6 +15,9 @@ from marshmallow_pipeline.cell_grouping_module.generate_raha_features import (
 
 def get_cells_features(sandbox_path, output_path, table_char_set_dict, tables_dict, dirty_files_name, clean_files_name, save_mediate_res_on_disk, pool, raha_config):
     start_time = time.time()
+    features_dict = {}
+    tables_tuples_dict = {}
+    column_feature_names = None
     try:
         list_dirs_in_snd = os.listdir(sandbox_path)
         list_dirs_in_snd.sort()
