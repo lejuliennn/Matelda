@@ -2,8 +2,10 @@ import copy
 import logging
 import pickle
 import time
-from marshmallow_pipeline.classification_module.classifier import classify
+
 import pandas as pd
+
+from marshmallow_pipeline.classification_module.classifier import classify
 
 
 def get_train_test_sets(X_temp, y_temp, samples_dict, cell_clustering_df):
@@ -119,10 +121,10 @@ def get_train_test_sets_per_col(X_temp, y_temp, samples_dict, cell_clustering_df
     logging.debug("Start classification Per Column")
     for col in X_train_cols:
         gbc, predicted_cols[col] = classify(X_train_cols[col], y_train_cols[col], X_test_cols[col])
-        if gbc is not None:
-            feature_importances = gbc.feature_importances_
-            with open(f"{output_path}/feature_importances_{col}.pickle", "wb") as f:
-                pickle.dump(feature_importances, f)
+        # if gbc is not None:
+        #     feature_importances = gbc.feature_importances_
+        #     with open(f"{output_path}/feature_importances_{col}.pickle", "wb") as f:
+        #         pickle.dump(feature_importances, f)
     logging.debug("End classification Per Column")
     logging.debug("*******Time for classification Per Column: %s", time.time() - s_time)
     for col in predicted_cols:

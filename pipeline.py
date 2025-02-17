@@ -6,16 +6,20 @@ import logging
 import multiprocessing
 import os
 import pickle
-from configparser import ConfigParser
 import time
+from configparser import ConfigParser
 
 import marshmallow_pipeline.utils.app_logger
-from marshmallow_pipeline.error_detection import error_detector
-from marshmallow_pipeline.column_grouping_module.grouping_columns import column_grouping
-from marshmallow_pipeline.table_grouping_module.grouping_tables import table_grouping
-from marshmallow_pipeline.utils.saving_results import get_all_results
+from marshmallow_pipeline.column_grouping_module.grouping_columns import \
+    column_grouping
+from marshmallow_pipeline.error_detection_demo import (before_user_labeling,
+                                                       error_detector)
+from marshmallow_pipeline.table_grouping_module.grouping_tables import \
+    table_grouping
 from marshmallow_pipeline.utils.loading_results import \
     loading_columns_grouping_results
+from marshmallow_pipeline.utils.saving_results import get_all_results
+
 
 def main(execution):
     ########################################
@@ -205,7 +209,20 @@ def main(execution):
 
     logging.info("Starting error detection")
 
-    # TODO: change output foldr of metanome
+    
+    domain_fold_samples, domain_fold_obj_all, original_data_keys, unique_cells_local_index_collection, predicted_all, y_test_all, y_local_cell_ids, X_labeled_by_user_all, y_labeled_by_user_all, selected_samples, used_labels, cell_cluster_cells_dict_all, df_n_labels =  \
+    before_user_labeling(column_groups_df_path, experiment_output_path, tables_path, dirty_files_name, 
+                         clean_files_name, n_cores, labeling_budget, min_n_labels_per_cell_group, 
+                         cluster_sizes_dict, tables_dict, min_num_labes_per_col_cluster, 
+                         cell_feature_generator_enabled, cell_clustering_res_available,
+                         save_mediate_res_on_disk, pool, raha_config
+                         )
+    
+    # Julian what you need to do is to update domain_fold_samples here and pass it to the next method. 
+    # The dictionary should be updated with the new labels.
+    # The structure is like this: {(Domain Fold ID): {(table_id, column_id, row_id): (cell_group_id, sample_index, label)}}
+    # see "/home/fatemeh/Julian/Matelda/output_qrm/output_qrm_0/_test_edbt_QRM_200_labels/domain_fold_samples.pickle" for a sample file
+    
     (
         y_test_all,
         y_local_cell_ids,
@@ -214,24 +231,14 @@ def main(execution):
         unique_cells_local_index_collection,
         samples, global_n_userl_labels
     ) = error_detector(
-        cell_feature_generator_enabled,
-        tables_path,
-        column_groups_df_path,
         experiment_output_path,
         results_path,
-        labeling_budget,
-        min_n_labels_per_cell_group,
-        cluster_sizes_dict,
-        tables_dict,
-        min_num_labes_per_col_cluster,
-        dirty_files_name, 
-        clean_files_name,
-        n_cores,
-        cell_clustering_res_available,
         save_mediate_res_on_disk,
-        pool,
         classification_mode,
-        raha_config
+        cell_cluster_cells_dict_all,
+        df_n_labels,
+        domain_fold_samples,
+        domain_fold_obj_all,
     )
 
     time_end = time.time()
