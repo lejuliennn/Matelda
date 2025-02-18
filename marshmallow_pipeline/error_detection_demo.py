@@ -7,7 +7,8 @@ import time
 import pandas as pd
 
 from marshmallow_pipeline.cell_grouping_module.cell_folding import (
-    cell_cluster_sampling_labeling, cluster_column_group)
+    cell_cluster_pred, cell_cluster_sampling,
+    cell_cluster_update_with_user_labels, cluster_column_group)
 from marshmallow_pipeline.cell_grouping_module.extract_table_group_charset import \
     extract_charset
 from marshmallow_pipeline.cell_grouping_module.generate_cell_features import \
@@ -20,33 +21,13 @@ if not sys.warnoptions:
 
     warnings.simplefilter("ignore")
 
-####################
-# ToDo: Remove notes
-# Note: Error Detector generates features for each cell 
-# (afterwards cell clustering and then sampling labeling)
-# We want to show user the cell fold
-def error_detector(
-    cell_feature_generator_enabled,
-    sandbox_path,
-    col_groups_dir,
-    output_path,
-    results_path,
-    n_labels,
-    labels_per_cell_group,
-    cluster_sizes_dict,
-    tables_dict,
-    min_num_labes_per_col_cluster,
-    dirty_files_name,
-    clean_files_name,
-    n_cores,
-    cell_clustering_res_available,
-    save_mediate_res_on_disk,
-    pool,
-    classification_mode,
-    raha_config
-):
-    logging.info("Starting error detection")
 
+def feature_generation_and_quality_based_clustering(col_groups_dir, output_path, sandbox_path,
+                                                    dirty_files_name, clean_files_name, n_cores,
+                                                    n_labels, labels_per_cell_group, cluster_sizes_dict, 
+                                                    tables_dict, min_num_labes_per_col_cluster, 
+                                                    cell_feature_generator_enabled, cell_clustering_res_available, 
+                                                    save_mediate_res_on_disk, pool, raha_config):
     logging.info("Extracting table charsets")
     table_charset_dict = extract_charset(col_groups_dir)
 
@@ -143,20 +124,89 @@ def error_detector(
             # or this dict
             cell_cluster_cells_dict_all = pickle.load(pickle_file)
 
-        # Until here you can achive cluster resluts
-        #
-        # visualize this part until here (Step 2 in Diagram of DrawIO)
-        # call the error function from here directly or 
-        # create a new function for this in the pipeline.py file  
-        #
-        # when calling the function from directly here, maybe comment out the sampling / labeling
-        # part below. Makes implementation easier
-        ############################################
+    return all_cell_clusters_records, cell_cluster_cells_dict_all, df_n_labels, features_dict, tables_tuples_dict
 
-    ###########################
-    # Next Week: Sampling / Labeling 
-
+def gather_samples(cell_cluster_cells_dict_all, all_cell_clusters_records, n_cores, tables_tuples_dict, labels_per_cell_group):
     logging.info("Sampling and labeling clusters")
+    logging.info("Starting processing of cell clusters")
+    domain_fold_samples = {}
+    domain_fold_obj_all = {}
+    for table_cluster in cell_cluster_cells_dict_all:
+        for col_cluster in cell_cluster_cells_dict_all[table_cluster]:
+            domain_fold_obj_all[(table_cluster, col_cluster)] = {}
+            domain_fold_obj = {}
+            cell_clustering_df = all_cell_clusters_records[
+                (all_cell_clusters_records["table_cluster"] == table_cluster)
+                & (all_cell_clusters_records["col_cluster"] == col_cluster)
+            ]
+            cell_cluster_cells_dict = cell_cluster_cells_dict_all[table_cluster][
+                col_cluster
+            ]
+            cell_cluster_cells_dict, cell_clustering_df, samples_dict, n_user_labeled_cells, cell_clusters_sampling_dict, X_temp, y_temp, universal_samples = \
+            cell_cluster_sampling(cell_clustering_df, cell_cluster_cells_dict, n_cores, tables_tuples_dict, labels_per_cell_group)
+            
+            domain_fold_samples[(table_cluster, col_cluster)] = cell_clusters_sampling_dict
+            domain_fold_obj["cell_cluster_cells_dict"] = cell_cluster_cells_dict
+            domain_fold_obj["cell_clustering_df"] = cell_clustering_df
+            domain_fold_obj["X_temp"] = X_temp
+            domain_fold_obj["y_temp"] = y_temp
+            domain_fold_obj["universal_samples"] = universal_samples
+            domain_fold_obj["n_user_labeled_cells"] = n_user_labeled_cells
+            domain_fold_obj["cell_clusters_sampling_dict"] = cell_clusters_sampling_dict
+            domain_fold_obj["samples_dict"] = samples_dict
+            domain_fold_obj_all[(table_cluster, col_cluster)] = domain_fold_obj
+    return domain_fold_samples, domain_fold_obj_all, cell_cluster_cells_dict_all
+
+def before_user_labeling(col_groups_dir, output_path, sandbox_path, dirty_files_name, 
+                         clean_files_name, n_cores, n_labels, labels_per_cell_group, 
+                         cluster_sizes_dict, tables_dict, min_num_labes_per_col_cluster, 
+                         cell_feature_generator_enabled, cell_clustering_res_available,
+                         save_mediate_res_on_disk, pool, raha_config
+                         ):
+    all_cell_clusters_records, cell_cluster_cells_dict_all, df_n_labels, features_dict, tables_tuples_dict = \
+        feature_generation_and_quality_based_clustering(col_groups_dir, output_path, sandbox_path,
+                                                    dirty_files_name, clean_files_name, n_cores,
+                                                    n_labels, labels_per_cell_group, cluster_sizes_dict, 
+                                                    tables_dict, min_num_labes_per_col_cluster, 
+                                                    cell_feature_generator_enabled, cell_clustering_res_available, 
+                                                    save_mediate_res_on_disk, pool, raha_config)
+                                                      
+    ###########################
+    # logging.info("Sampling and labeling clusters")
+    start_time = time.time()    
+    original_data_keys = []
+    unique_cells_local_index_collection = {}
+    predicted_all = {}
+    y_test_all = {}
+    y_local_cell_ids = {}
+    X_labeled_by_user_all = {}
+    y_labeled_by_user_all = {}
+    selected_samples = {}
+    used_labels = 0
+    logging.info("Starting processing of cell clusters")
+    domain_fold_samples, domain_fold_obj_all, cell_cluster_cells_dict_all = gather_samples(cell_cluster_cells_dict_all, all_cell_clusters_records, 
+                                                          n_cores, tables_tuples_dict, labels_per_cell_group)
+    with open(os.path.join(output_path, "domain_fold_samples.pickle"), "wb") as filehandler:
+        pickle.dump(domain_fold_samples, filehandler)
+    return domain_fold_samples, domain_fold_obj_all, original_data_keys, unique_cells_local_index_collection, predicted_all, y_test_all, y_local_cell_ids, X_labeled_by_user_all, y_labeled_by_user_all, selected_samples, used_labels, cell_cluster_cells_dict_all, df_n_labels
+
+####################
+# ToDo: Remove notes
+# Note: Error Detector generates features for each cell 
+# (afterwards cell clustering and then sampling labeling)
+# We want to show user the cell fold
+def error_detector(
+    output_path,
+    results_path,
+    save_mediate_res_on_disk,
+    classification_mode,
+    cell_cluster_cells_dict_all,
+    df_n_labels,
+    domain_fold_samples,
+    domain_fold_obj_all,
+):
+    logging.info("Starting error detection")
+
     start_time = time.time()    
     original_data_keys = []
     unique_cells_local_index_collection = {}
@@ -171,7 +221,20 @@ def error_detector(
     results = []
     for table_cluster in cell_cluster_cells_dict_all:
         for col_cluster in cell_cluster_cells_dict_all[table_cluster]:
-            result = test(df_n_labels, output_path, all_cell_clusters_records, cell_cluster_cells_dict_all, n_cores, save_mediate_res_on_disk, classification_mode, tables_tuples_dict, labels_per_cell_group, col_cluster, table_cluster)
+            domain_fold_obj = domain_fold_obj_all[(table_cluster, col_cluster)]
+            cell_clustering_df = domain_fold_obj["cell_clustering_df"]
+            samples_dict = domain_fold_obj["samples_dict"]
+            cell_cluster_cells_dict = domain_fold_obj["cell_cluster_cells_dict"]
+            X_temp = domain_fold_obj["X_temp"]
+            y_temp = domain_fold_obj["y_temp"]
+            universal_samples = domain_fold_obj["universal_samples"]
+            n_user_labeled_cells = domain_fold_obj["n_user_labeled_cells"]
+            cell_clusters_sampling_dict =  domain_fold_samples[(table_cluster, col_cluster)]
+            samples_dict = cell_cluster_update_with_user_labels(cell_clusters_sampling_dict, samples_dict)            
+            cell_cluster_sampling_labeling_dict, cell_clustering_df, samples_dict, n_user_labeled_cells = \
+            cell_cluster_pred(samples_dict, cell_clustering_df, cell_cluster_cells_dict, X_temp, y_temp, classification_mode, output_path, n_user_labeled_cells, universal_samples)
+            result = test(output_path, df_n_labels, save_mediate_res_on_disk, col_cluster, 
+                          table_cluster, cell_cluster_sampling_labeling_dict, cell_clustering_df, samples_dict, n_user_labeled_cells)
             results.append(result)
     n_user_labeled_cells = 0
     for result in results:
@@ -215,7 +278,7 @@ def error_detector(
     )
 
 
-def test(df_n_labels, output_path, all_cell_clusters_records, cell_cluster_cells_dict_all, n_cores, save_mediate_res_on_disk, classification_mode, tables_tuples_dict, labels_per_cell_group, col_cluster, table_cluster):
+def test(output_path, df_n_labels, save_mediate_res_on_disk, col_cluster, table_cluster, cell_cluster_sampling_labeling_dict, cell_clustering_df, samples_dict, n_user_labeled_cells):
     logging.info("Starting test; Column cluster: %s; Table cluster %s", col_cluster, table_cluster)
     original_data_keys = []
     unique_cells_local_index_collection = {}
@@ -226,17 +289,6 @@ def test(df_n_labels, output_path, all_cell_clusters_records, cell_cluster_cells
     y_labeled_by_user_all = {}
     selected_samples = {}
     used_labels = 0
-
-    cell_clustering_df = all_cell_clusters_records[
-        (all_cell_clusters_records["table_cluster"] == table_cluster)
-        & (all_cell_clusters_records["col_cluster"] == col_cluster)
-    ]
-    cell_cluster_cells_dict = cell_cluster_cells_dict_all[table_cluster][
-        col_cluster
-    ]
-    cell_cluster_sampling_labeling_dict, cell_clustering_df, samples_dict, n_user_labeled_cells = cell_cluster_sampling_labeling(
-        cell_clustering_df, cell_cluster_cells_dict, n_cores, classification_mode, tables_tuples_dict, labels_per_cell_group, output_path
-    )
 
     if save_mediate_res_on_disk:
         cell_clustering_dir = os.path.join(output_path, "cell_clustering")

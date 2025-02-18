@@ -4,10 +4,14 @@ import os
 import pickle
 
 import pandas as pd
-from marshmallow_pipeline.cell_grouping_module.generate_cell_features import get_cells_in_cluster
-from marshmallow_pipeline.cell_grouping_module.sampling_labeling import cell_clustering, labeling, sampling
+
+from marshmallow_pipeline.cell_grouping_module.generate_cell_features import \
+    get_cells_in_cluster
+from marshmallow_pipeline.cell_grouping_module.sampling_labeling import (
+    cell_clustering, labeling, sampling)
 from marshmallow_pipeline.classification_module.classifier import classify
-from marshmallow_pipeline.classification_module.get_train_test import get_train_test_sets, get_train_test_sets_per_col
+from marshmallow_pipeline.classification_module.get_train_test import (
+    get_train_test_sets, get_train_test_sets_per_col)
 
 
 def col_clu_cell_clustering(
@@ -27,17 +31,7 @@ def col_clu_cell_clustering(
     logging.debug("processing cluster %s ... done", str(col_cluster))
     return cell_cluster_cells_dict, cell_clustering_dict
 
-def cell_cluster_sampling_labeling(cell_clustering_df, cell_cluster_cells_dict, n_cores, 
-                                   classification_mode, tables_tuples_dict, min_n_labels_per_cell_group, output_path):
-    logging.info(
-        "Sampling and labeling cluster %s",
-        str(cell_clustering_df["col_cluster"].values[0]),
-    )
-    logging.debug(
-        "Number of labels (updated): %s",
-        str(cell_clustering_df["n_labels_updated"].values[0]),
-    )
-
+def cell_cluster_sampling(cell_clustering_df, cell_cluster_cells_dict, n_cores, tables_tuples_dict, min_n_labels_per_cell_group):
     try:
         if cell_clustering_df["n_labels_updated"].values[0] > 0:
             X_temp = cell_cluster_cells_dict["X_temp"]
@@ -47,10 +41,13 @@ def cell_cluster_sampling_labeling(cell_clustering_df, cell_cluster_cells_dict, 
             original_data_keys_temp = cell_cluster_cells_dict["original_data_keys_temp"]
             samples_dict, cell_clustering_df, n_user_labeled_cells = sampling(cell_clustering_df, X_temp, y_temp, value_temp, original_data_keys_temp, n_cores, tables_tuples_dict, min_n_labels_per_cell_group)
             logging.info("Start labeling for cluster %s", str(cell_clustering_df["col_cluster"].values[0]))
-            samples_dict = labeling(samples_dict)
+            # samples_dict = labeling(samples_dict)
             universal_samples = {}
             logging.debug("len samples: %s", str(len(samples_dict["cell_cluster"])))
+            cell_clusters_sampling_dict = {}
             for cell_cluster_idx, _ in enumerate(samples_dict["cell_cluster"]):
+                if cell_cluster_idx not in cell_clusters_sampling_dict:
+                    cell_clusters_sampling_dict[cell_cluster_idx] = {}
                 if len(samples_dict["samples"][cell_cluster_idx]) > 0:
                     for idx, cell_idx in enumerate(
                         samples_dict["samples_indices_global"][cell_cluster_idx]
@@ -62,11 +59,29 @@ def cell_cluster_sampling_labeling(cell_clustering_df, cell_cluster_cells_dict, 
                                 ][idx]
                             }
                         )
+                        cell_clusters_sampling_dict[cell_cluster_idx].update(
+                            {
+                                key_temp[cell_idx]: (cell_cluster_idx, idx, None)
+                            })
             logging.debug("len to_be_added: %s", str(len(universal_samples)))
         else:
             # we need at least 2 labels per col group (in the cases that we have only one cluster 1 label is enough)
             samples_dict = None
+    except Exception as e:
+        logging.error(
+            "Error in sampling cluster %s", str(cell_clustering_df["col_cluster"].values[0])
+        )
+        logging.error(e)
+    return cell_cluster_cells_dict, cell_clustering_df, samples_dict, n_user_labeled_cells, cell_clusters_sampling_dict, X_temp, y_temp, universal_samples
 
+def cell_cluster_update_with_user_labels(cell_clusters_sampling_dict, samples_dict):
+    for cell_cluster_idx, cell_cluster_dict in cell_clusters_sampling_dict.items():
+        for cell_idx, cell_label_dict in cell_cluster_dict.items():
+            samples_dict["labels"][cell_cluster_idx][cell_label_dict[1]] = cell_label_dict[2]
+    return samples_dict
+
+def cell_cluster_pred(samples_dict, cell_clustering_df, cell_cluster_cells_dict, X_temp, y_temp, classification_mode, output_path, n_user_labeled_cells, universal_samples):
+    try:
         if samples_dict is None:
             return None
         else:
@@ -87,7 +102,6 @@ def cell_cluster_sampling_labeling(cell_clustering_df, cell_cluster_cells_dict, 
                 X_train, y_train, X_test, y_test, y_cell_ids, predicted = get_train_test_sets_per_col(
                     X_temp, y_temp, samples_dict, cell_clustering_df, cell_cluster_cells_dict["datacells_uids"], output_path
                 )
-                
     except Exception as e:
         logging.error(
             "Error in cluster %s", str(cell_clustering_df["col_cluster"].values[0])
@@ -111,6 +125,91 @@ def cell_cluster_sampling_labeling(cell_clustering_df, cell_cluster_cells_dict, 
     logging.debug("Number of labels (used): %s", str(len(X_labeled_by_user)))
     return cell_cluster_sampling_labeling_dict, cell_clustering_df, samples_dict, n_user_labeled_cells
 
+# def cell_cluster_sampling_labeling(cell_clustering_df, cell_cluster_cells_dict, n_cores, 
+#                                    classification_mode, tables_tuples_dict, min_n_labels_per_cell_group, output_path):
+    # logging.info(
+    #     "Sampling and labeling cluster %s",
+    #     str(cell_clustering_df["col_cluster"].values[0]),
+    # )
+    # logging.debug(
+    #     "Number of labels (updated): %s",
+    #     str(cell_clustering_df["n_labels_updated"].values[0]),
+    # )
+
+    # try:
+        # if cell_clustering_df["n_labels_updated"].values[0] > 0:
+        #     X_temp = cell_cluster_cells_dict["X_temp"]
+        #     y_temp = cell_cluster_cells_dict["y_temp"]
+        #     value_temp = cell_cluster_cells_dict["value_temp"]
+        #     key_temp = cell_cluster_cells_dict["key_temp"]
+        #     original_data_keys_temp = cell_cluster_cells_dict["original_data_keys_temp"]
+        #     samples_dict, cell_clustering_df, n_user_labeled_cells = sampling(cell_clustering_df, X_temp, y_temp, value_temp, original_data_keys_temp, n_cores, tables_tuples_dict, min_n_labels_per_cell_group)
+        #     logging.info("Start labeling for cluster %s", str(cell_clustering_df["col_cluster"].values[0]))
+        #     samples_dict = labeling(samples_dict)
+        #     universal_samples = {}
+        #     logging.debug("len samples: %s", str(len(samples_dict["cell_cluster"])))
+        #     for cell_cluster_idx, _ in enumerate(samples_dict["cell_cluster"]):
+        #         if len(samples_dict["samples"][cell_cluster_idx]) > 0:
+        #             for idx, cell_idx in enumerate(
+        #                 samples_dict["samples_indices_global"][cell_cluster_idx]
+        #             ):
+        #                 universal_samples.update(
+        #                     {
+        #                         key_temp[cell_idx]: samples_dict["labels"][
+        #                             cell_cluster_idx
+        #                         ][idx]
+        #                     }
+        #                 )
+        #     logging.debug("len to_be_added: %s", str(len(universal_samples)))
+        # else:
+        #     # we need at least 2 labels per col group (in the cases that we have only one cluster 1 label is enough)
+        #     samples_dict = None
+
+    #     cell_cluster_cells_dict, cell_clustering_df, samples_dict, n_user_labeled_cells = \
+    #         cell_cluster_sampling(cell_clustering_df, cell_cluster_cells_dict, n_cores, tables_tuples_dict, min_n_labels_per_cell_group)
+    #     if samples_dict is None:
+    #         return None
+    #     else:
+    #         X_labeled_by_user = []
+    #         y_labeled_by_user = []
+    #         for cell_cluster_idx, _ in enumerate(samples_dict["cell_cluster"]):
+    #             if len(samples_dict["samples"][cell_cluster_idx]) > 0:
+    #                 X_labeled_by_user.extend(samples_dict["samples"][cell_cluster_idx])
+    #                 y_labeled_by_user.extend(samples_dict["labels"][cell_cluster_idx])
+    #         logging.debug("len X_labeled_by_user: %s", str(len(X_labeled_by_user)))
+    #         if classification_mode == 0:
+    #             X_train, y_train, X_test, y_test, y_cell_ids = get_train_test_sets(
+    #                 X_temp, y_temp, samples_dict, cell_clustering_df
+    #             )
+    #             logging.info("start classification for cluster %s", str(cell_clustering_df["col_cluster"].values[0]))
+    #             gbc, predicted = classify(X_train, y_train, X_test)
+    #         elif classification_mode == 1:
+    #             X_train, y_train, X_test, y_test, y_cell_ids, predicted = get_train_test_sets_per_col(
+    #                 X_temp, y_temp, samples_dict, cell_clustering_df, cell_cluster_cells_dict["datacells_uids"], output_path
+    #             )
+                
+    # except Exception as e:
+    #     logging.error(
+    #         "Error in cluster %s", str(cell_clustering_df["col_cluster"].values[0])
+    #     )
+    #     logging.error(e)
+
+    # cell_cluster_sampling_labeling_dict = {
+    #     "y_test": y_test,
+    #     "y_cell_ids": y_cell_ids,
+    #     "predicted": predicted,
+    #     "original_data_keys_temp": cell_cluster_cells_dict["original_data_keys_temp"],
+    #     "universal_samples": universal_samples,
+    #     "X_labeled_by_user": X_labeled_by_user,
+    #     "y_labeled_by_user": y_labeled_by_user,
+    #     "datacells_uids": cell_cluster_cells_dict["datacells_uids"],
+    # }
+    # logging.info(
+    #     "Finished sampling and labeling cluster %s",
+    #     str(cell_clustering_df["col_cluster"].values[0]),
+    # )
+    # logging.debug("Number of labels (used): %s", str(len(X_labeled_by_user)))
+    # return cell_cluster_sampling_labeling_dict, cell_clustering_df, samples_dict, n_user_labeled_cells
 
 def cluster_column_group(col_groups_dir, df_n_labels, features_dict, labels_per_cell_group, file_name, n_cores):
     logging.info("Clustering column group: %s", file_name)
