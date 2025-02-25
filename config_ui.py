@@ -327,108 +327,114 @@ def create_cell_fold_accordion(configs):
 
 def create_sample_row(sample_key, sample_val, configs):
     """
-    Create a row for a single sample with two buttons.
-    The sample key is expected to be a tuple of the form:
-      (table_hash, column_id, row_id)
-    where table_hash is the MD5 hash of "foldername.csv".
-    
-    This function uses the hash to determine the table (folder) name, opens the corresponding
-    dirty CSV file from that folder, and then retrieves the cell value by looking up the row
-    with a matching 'tuple_id' (if available) and using the provided column index.
-    
-    The sample information is displayed in a scrollable HTML widget.
-    """
+    Create a vertical layout:
+      1) A single HTML block containing sample info and the table
+      2) A horizontal row of True/False buttons below the table
 
-    # Determine the configuration object.
+    Removes the top 'Sample/True/False' headers and avoids an extra sample row above the domain fold.
+    """
+    
+    # Retrieve config object if needed
     config_obj = configs["configs"] if "configs" in configs else configs
 
-    # Access the "DIRECTORIES" section.
     sandbox_dir = config_obj["DIRECTORIES"]["sandbox_dir"]
     tables_dir = config_obj["DIRECTORIES"]["tables_dir"]
     datasets_table_path = os.path.join(sandbox_dir, tables_dir)
-    
-    # Build a dictionary mapping MD5 hash of "foldername.csv" to the folder name.
+
+    # Build a dict: MD5("foldername.csv") -> foldername
     hash_dict = {}
     for entry in os.listdir(datasets_table_path):
         entry_path = os.path.join(datasets_table_path, entry)
         if os.path.isdir(entry_path):
             csv_string = f"{entry}.csv"
-            file_hash = hashlib.md5(csv_string.encode('utf-8')).hexdigest()
-            hash_dict[file_hash] = entry  # folder name as table name
+            file_hash = hashlib.md5(csv_string.encode("utf-8")).hexdigest()
+            hash_dict[file_hash] = entry
 
-    # Extract the inner key from sample_val if available; otherwise use sample_key.
+    # Extract the relevant tuple from sample_val (if it's a dict) or use sample_key directly
     if isinstance(sample_val, dict) and len(sample_val) > 0:
         inner_key = list(sample_val.keys())[0]
     else:
         inner_key = sample_key
 
-    # Expect the inner key to be a tuple: (file_hash, column_id, row_id)
+    # Expect inner_key as (file_hash, col_idx, row_id)
     if isinstance(inner_key, tuple) and len(inner_key) >= 3:
-        file_hash = inner_key[0]
-        col_idx = inner_key[1]
-        row_id = inner_key[2]
+        file_hash, col_idx, row_id = inner_key[0], inner_key[1], inner_key[2]
     else:
-        file_hash = inner_key
-        col_idx, row_id = None, None
+        file_hash, col_idx, row_id = inner_key, None, None
 
-    # Look up the table (folder) name using the hash dictionary.
+    # Map hash -> folder (table) name
     table_name = hash_dict.get(file_hash, file_hash)
 
-    # Now, open the corresponding dirty CSV from that table folder and retrieve the cell value.
-    cell_value = "N/A"
-    folder_path = os.path.join(datasets_table_path, table_name)
-    # Use the dirty file name from the configuration (default to "dirty.csv")
+    # Attempt to load the dirty CSV
     dirty_filename = config_obj["DIRECTORIES"].get("dirty_files_name", "dirty.csv")
-    dirty_csv_path = os.path.join(folder_path, dirty_filename)
-    
+    dirty_csv_path = os.path.join(datasets_table_path, table_name, dirty_filename)
+
+    # Build the HTML table snippet
+    table_html = ""
     try:
         df = pd.read_csv(dirty_csv_path)
-        # If the dataframe has a 'tuple_id' column, use it to locate the correct row.
-        if 'tuple_id' in df.columns and pd.api.types.is_numeric_dtype(df['tuple_id']):
-            # Ensure the tuple_id column is numeric
-            df['tuple_id'] = pd.to_numeric(df['tuple_id'], errors='coerce')
-            matching = df[df['tuple_id'] == row_id]
+        if "tuple_id" in df.columns:
+            df["tuple_id"] = pd.to_numeric(df["tuple_id"], errors="coerce")
+            matching = df[df["tuple_id"] == row_id]
             if not matching.empty:
-                row_data = matching.iloc[0]
-                try:
-                    cell_value = row_data.iloc[col_idx]
-                except Exception as e:
-                    cell_value = f"Error (col lookup): {e}"
+                target_idx = matching.index[0]
             else:
-                cell_value = f"Row id {row_id} not found"
+                raise ValueError(f"Row id {row_id} not found in 'tuple_id' column.")
         else:
-            # Otherwise, assume row_id is a direct row index.
-            cell_value = df.iloc[row_id, col_idx]
+            target_idx = row_id
+
+        # Show up to 3 rows: one before, target, one after
+        indices_to_show = []
+        if target_idx > 0:
+            indices_to_show.append(target_idx - 1)
+        indices_to_show.append(target_idx)
+        if target_idx < len(df) - 1:
+            indices_to_show.append(target_idx + 1)
+
+        # Generate HTML table
+        table_html += "<table style='border-collapse: collapse; width: auto;'>"
+        # Header row
+        table_html += "<tr>"
+        for col_name in df.columns:
+            table_html += f"<th style='border: 1px solid #ccc; padding: 4px;'>{col_name}</th>"
+        table_html += "</tr>"
+
+        # Rows
+        for idx in indices_to_show:
+            row_data = df.iloc[idx]
+            row_style = "background-color: lightyellow;" if idx == target_idx else ""
+            table_html += f"<tr style='{row_style}'>"
+            for j, col_name in enumerate(df.columns):
+                cell_val = row_data[col_name]
+                if idx == target_idx and j == col_idx:
+                    cell_style = "background-color: darkorange; border: 1px solid #ccc; padding: 4px;"
+                else:
+                    cell_style = "border: 1px solid #ccc; padding: 4px;"
+                table_html += f"<td style='{cell_style}'>{cell_val}</td>"
+            table_html += "</tr>"
+        table_html += "</table>"
+
     except Exception as e:
-        cell_value = f"Error: {e}"
+        table_html = f"<p style='color:red;'>Error reading CSV: {e}</p>"
 
-    # Build the sample string showing table name and cell value.
-    sample_str = (f"Sample {sample_key}: Table: {table_name} | "
-                  f"Cell Value: {cell_value} | Sample Value: {sample_val}")
-    html_str = f"<div style='width:600px; overflow:auto;'>{sample_str}</div>"
-    label = widgets.HTML(value=html_str)
+    # Combine sample info and the table
+    sample_info = f"Sample {sample_key}: Table: {table_name}, Row: {row_id}, Col: {col_idx}"
+    combined_html = f"<div>{sample_info}</div><div style='max-width:100%; overflow:auto;'>{table_html}</div>"
+    info_table_widget = widgets.HTML(value=combined_html)
 
-    # Create two buttons: True (default selected) and False.
-    btn_true = widgets.Button(
-        description="True", 
-        button_style="success",
-        layout=widgets.Layout(width='100px')
-    )
-    btn_false = widgets.Button(
-        description="False", 
-        button_style="",
-        layout=widgets.Layout(width='100px')
-    )
+    # Create True/False buttons
+    btn_true = widgets.Button(description="True", button_style="success")
+    btn_false = widgets.Button(description="False", button_style="")
 
     state = {"value": True}
 
-    def on_true_click(b):
+    def on_true_click(_):
         if state["value"] is not True:
             state["value"] = True
             btn_true.button_style = "success"
             btn_false.button_style = ""
 
-    def on_false_click(b):
+    def on_false_click(_):
         if state["value"] is not False:
             state["value"] = False
             btn_true.button_style = ""
@@ -437,8 +443,11 @@ def create_sample_row(sample_key, sample_val, configs):
     btn_true.on_click(on_true_click)
     btn_false.on_click(on_false_click)
 
-    row = widgets.HBox([label, btn_true, btn_false])
-    return row, state
+    # Place the buttons below the table
+    button_box = widgets.HBox([btn_true, btn_false])
+    main_layout = widgets.VBox([info_table_widget, button_box])
+
+    return main_layout, state
 
 
 def create_domain_fold_widget(fold_id, samples, configs):
@@ -447,13 +456,7 @@ def create_domain_fold_widget(fold_id, samples, configs):
     The header row displays fixed button headers (as column headers).
     Each sample row shows its description plus two mutually exclusive buttons.
     """
-    # Header row with disabled buttons as column headers.
-    header = widgets.HBox([
-        widgets.Label("Sample", layout=widgets.Layout(width='300px')),
-        widgets.Button(description="True", disabled=True, button_style="success", layout=widgets.Layout(width='100px')),
-        widgets.Button(description="False", disabled=True, button_style="danger", layout=widgets.Layout(width='100px'))
-    ])
-    
+        
     # Create sample rows.
     sample_rows = []
     # This dict will hold the state for each sample in this fold.
@@ -462,8 +465,7 @@ def create_domain_fold_widget(fold_id, samples, configs):
         row, state = create_sample_row(sample_key, sample_val, configs)
         sample_rows.append(row)
         sample_states[sample_key] = state
-    # Pack the header and sample rows together.
-    fold_widget = widgets.VBox([header] + sample_rows)
+    fold_widget = widgets.VBox(sample_rows)
     return fold_widget, sample_states
 
 def display_labeling_widget(domain_fold_samples, configs):
