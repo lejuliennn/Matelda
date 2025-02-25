@@ -5,7 +5,9 @@ import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
 from configparser import ConfigParser
 import time
-
+import os
+import pickle
+import logging
 import sys
 import pandas as pd
 
@@ -399,7 +401,7 @@ def domain_based_folding(configs, pool):
 # from error_detection.py #
 ###########################
 
-
+"""
 ####################
 # ToDo: Remove notes
 # Note: Error Detector generates features for each cell 
@@ -593,7 +595,7 @@ def error_detector(
         selected_samples,
         n_user_labeled_cells,
     )
-
+"""
 
 def test(df_n_labels, output_path, all_cell_clusters_records, cell_cluster_cells_dict_all, n_cores, save_mediate_res_on_disk, classification_mode, tables_tuples_dict, labels_per_cell_group, col_cluster, table_cluster):
     logging.info("Starting test; Column cluster: %s; Table cluster %s", col_cluster, table_cluster)
@@ -691,7 +693,7 @@ def test(df_n_labels, output_path, all_cell_clusters_records, cell_cluster_cells
     
     return {"original_data_keys": original_data_keys, "unique_cells_local_index_collection": unique_cells_local_index_collection, "predicted_all": predicted_all, "y_test_all": y_test_all, "y_local_cell_ids": y_local_cell_ids, "X_labeled_by_user_all": X_labeled_by_user_all, "y_labeled_by_user_all": y_labeled_by_user_all, "selected_samples": selected_samples, "used_labels": used_labels, "n_user_labeled_cells": n_user_labeled_cells}
 
-###########################
+
 
 
 def quality_based_folding(configs, pool, column_groups_df_path, cluster_sizes_dict):
@@ -769,7 +771,6 @@ def quality_based_folding(configs, pool, column_groups_df_path, cluster_sizes_di
     # The dictionary should be updated with the new labels.
     # The structure is like this: {(Domain Fold ID): {(table_id, column_id, row_id): (cell_group_id, sample_index, label)}}
     # see "/home/fatemeh/Julian/Matelda/output_qrm/output_qrm_0/_test_edbt_QRM_200_labels/domain_fold_samples.pickle" for a sample file
-    
 
     # Call error_detector
     (
@@ -829,5 +830,214 @@ def quality_based_folding(configs, pool, column_groups_df_path, cluster_sizes_di
     logging.info(f"Number of user labeled cells: {global_n_userl_labels}")
 
     # Return the results so they can be inspected in the notebook
+    return (y_test_all, y_local_cell_ids, predicted_all, y_labeled_by_user_all,
+            unique_cells_local_index_collection, samples, global_n_userl_labels)
+
+
+### ToDo: Remove quality based folding: the complete function which is not separated into two parts
+
+def quality_based_folding_part_one(configs, pool, column_groups_df_path, cluster_sizes_dict):
+    """
+    Quality based folding function that performs error detection and cell folding based on cell quality.
+    It leverages the error_detector function to generate cell features, cluster cells, and perform sampling and labeling.
+
+    Parameters:
+        configs (dict): Dictionary containing all configurations and paths.
+            This dictionary includes both a flattened set of keys (e.g., "sandbox_path", "n_cores", etc.)
+            and the original configuration data (either as a ConfigParser object or as a dictionary)
+            stored under the key "configs".
+        pool (multiprocessing.Pool): A multiprocessing pool for parallel processing.
+        column_groups_df_path (str): Path to the file with column grouping results (used for cell grouping).
+        cluster_sizes_dict (dict): Dictionary containing the sizes of the column clusters.
+
+    Returns:
+        tuple: A tuple containing the following elements:
+            - y_test_all: Ground truth labels for each cell.
+            - y_local_cell_ids: Local cell identifiers.
+            - predicted_all: Predicted labels for each cell.
+            - y_labeled_by_user_all: Labels provided by the user.
+            - unique_cells_local_index_collection: Mapping of unique cell indexes.
+            - selected_samples: Samples selected for further review.
+            - n_user_labeled_cells: Total number of cells labeled by the user.
+    """
+    logging.info("Starting quality based folding")
+
+    # Retrieve the original configuration data (it may be a ConfigParser or a plain dict)
+    cp = configs["configs"]
+   
+    cell_feature_generator_enabled = bool(int(cp["CELL_GROUPING"].get("cell_feature_generator_enabled", 0)))
+    cell_clustering_res_available = bool(int(cp["CELL_GROUPING"].get("cell_clustering_res_available", 0)))
+    classification_mode = int(cp["CELL_GROUPING"].get("classification_mode", 1))
+    labels_per_cell_group = int(cp["CELL_GROUPING"].get("labels_per_cell_group", 6))
+
+    # Retrieve additional parameters from the flattened configuration
+    sandbox_path = configs["sandbox_path"]
+    experiment_output_path = configs["experiment_output_path"]
+    results_path = configs["results_path"]
+    labeling_budget = configs["labeling_budget"]
+    min_num_labes_per_col_cluster = configs["min_num_labes_per_col_cluster"]
+    tables_dict = configs["tables_dict"]
+    dirty_files_name = configs["dirty_files_name"]
+    clean_files_name = configs["clean_files_name"]
+    n_cores = configs["n_cores"]
+    save_mediate_res_on_disk = configs["save_mediate_res_on_disk"]
+    raha_config = configs["raha_config"]
+
+    tables_path = os.path.join(sandbox_path, cp["DIRECTORIES"]["tables_dir"])
+    min_n_labels_per_cell_group = int(cp["CELL_GROUPING"]["labels_per_cell_group"])
+    final_result_df = bool(int(cp["EXPERIMENTS"]["final_result_df"]))
+    results_path = os.path.join(experiment_output_path, cp["DIRECTORIES"]["results_dir"])
+
+    logging.info("Starting quality-based folding part one (pre-labeling)")
+
+    # Call the function that does all the work until user labeling.
+    # This returns a tuple of:
+    # (domain_fold_samples, domain_fold_obj_all, original_data_keys,
+    #  unique_cells_local_index_collection, predicted_all, y_test_all, y_local_cell_ids,
+    #  X_labeled_by_user_all, y_labeled_by_user_all, selected_samples, used_labels,
+    #  cell_cluster_cells_dict_all, df_n_labels)
+    intermediate_results = before_user_labeling(
+         column_groups_df_path,
+         experiment_output_path,
+         tables_path,
+         dirty_files_name,
+         clean_files_name,
+         n_cores,
+         labeling_budget,
+         min_n_labels_per_cell_group,
+         cluster_sizes_dict,
+         tables_dict,
+         min_num_labes_per_col_cluster,
+         cell_feature_generator_enabled,
+         cell_clustering_res_available,
+         save_mediate_res_on_disk,
+         pool,
+         raha_config
+    )
+
+    # Return all intermediate data so that it can be visualized and labeled.
+    return intermediate_results
+
+
+    
+    #domain_fold_samples, domain_fold_obj_all, original_data_keys, unique_cells_local_index_collection, predicted_all, y_test_all, y_local_cell_ids, X_labeled_by_user_all, y_labeled_by_user_all, selected_samples, used_labels, cell_cluster_cells_dict_all, df_n_labels =  \
+    #before_user_labeling(column_groups_df_path, experiment_output_path, tables_path, dirty_files_name, 
+    #                     clean_files_name, n_cores, labeling_budget, min_n_labels_per_cell_group, 
+    #                     cluster_sizes_dict, tables_dict, min_num_labes_per_col_cluster, 
+    #                     cell_feature_generator_enabled, cell_clustering_res_available,
+    #                     save_mediate_res_on_disk, pool, raha_config
+    #                     )
+    
+
+    # HERE SHOULD BE THE END OF THE FIRST FUNCTION AND IT SHOULD RETURN ALL THE DATA
+    # so that i can visualize it later and show it to the user in the pipeline-notebook.ipynb
+
+    # -------------------------------------
+    # start of new function: ..._part_two()
+
+
+    # Julian what you need to do is to update domain_fold_samples here and pass it to the next method. 
+    # The dictionary should be updated with the new labels.
+    # The structure is like this: {(Domain Fold ID): {(table_id, column_id, row_id): (cell_group_id, sample_index, label)}}
+    # see "/home/fatemeh/Julian/Matelda/output_qrm/output_qrm_0/_test_edbt_QRM_200_labels/domain_fold_samples.pickle" for a sample file
+    
+def quality_based_folding_part_two(configs, intermediate_results):
+    """
+    Part Two of quality-based folding.
+    This function accepts the intermediate results (which now include user-updated labels in domain_fold_samples)
+    and continues with error detection and the remaining processing steps.
+    
+    Parameters:
+      - configs: configuration dictionary.
+      - intermediate_results: the tuple returned by part one, where the first element (domain_fold_samples)
+                              has been updated by the user.
+                              
+    Returns:
+      A tuple with the final results (e.g. y_test_all, y_local_cell_ids, predicted_all, etc.).
+    """
+
+    # Unpack the intermediate results.
+    (domain_fold_samples,
+     domain_fold_obj_all,
+     original_data_keys,
+     unique_cells_local_index_collection,
+     predicted_all,
+     y_test_all,
+     y_local_cell_ids,
+     X_labeled_by_user_all,
+     y_labeled_by_user_all,
+     selected_samples,
+     used_labels,
+     cell_cluster_cells_dict_all,
+     df_n_labels) = intermediate_results
+     
+    cp = configs["configs"]
+    experiment_output_path = configs["experiment_output_path"]
+    results_path = configs["results_path"]
+    save_mediate_res_on_disk = configs["save_mediate_res_on_disk"]
+    classification_mode = int(cp["CELL_GROUPING"].get("classification_mode", 1))
+    tables_dict = configs["tables_dict"]
+    dirty_files_name = configs["dirty_files_name"]
+    clean_files_name = configs["clean_files_name"]
+    final_result_df = bool(int(cp["EXPERIMENTS"]["final_result_df"]))
+    
+    logging.info("Starting quality-based folding part two (post-labeling)")
+
+    # Continue with error detection using the (now labeled) domain_fold_samples.
+    (y_test_all,
+     y_local_cell_ids,
+     predicted_all,
+     y_labeled_by_user_all,
+     unique_cells_local_index_collection,
+     samples,
+     global_n_userl_labels) = error_detector(
+         experiment_output_path,
+         results_path,
+         save_mediate_res_on_disk,
+         classification_mode,
+         cell_cluster_cells_dict_all,
+         df_n_labels,
+         domain_fold_samples,    # UPDATED samples with user labels
+         domain_fold_obj_all
+    )
+    
+    logging.info("Quality-based folding part two completed")
+
+    # Save final results.
+    final_results_path = os.path.join(results_path, "final_results")
+    os.makedirs(final_results_path, exist_ok=True)
+    with open(os.path.join(final_results_path, "tables_dict.pickle"), "wb+") as handle:
+        pickle.dump(tables_dict, handle)
+    with open(os.path.join(final_results_path, "y_test_all.pickle"), "wb+") as handle:
+        pickle.dump(y_test_all, handle)
+    with open(os.path.join(final_results_path, "y_local_cell_ids.pickle"), "wb+") as handle:
+        pickle.dump(y_local_cell_ids, handle)
+    with open(os.path.join(final_results_path, "predicted_all.pickle"), "wb+") as handle:
+        pickle.dump(predicted_all, handle)
+    with open(os.path.join(final_results_path, "y_labeled_by_user_all.pickle"), "wb+") as handle:
+        pickle.dump(y_labeled_by_user_all, handle)
+    with open(os.path.join(final_results_path, "unique_cells_local_index_collection.pickle"), "wb+") as handle:
+        pickle.dump(unique_cells_local_index_collection, handle)
+    with open(os.path.join(final_results_path, "samples.pickle"), "wb+") as handle:
+        pickle.dump(samples, handle)
+    
+    # Optionally, call a helper to gather and display final results.
+    get_all_results(
+        tables_dict,
+        os.path.join(configs["sandbox_path"], cp["DIRECTORIES"]["tables_dir"]),
+        results_path,
+        y_test_all,
+        y_local_cell_ids,
+        predicted_all,
+        y_labeled_by_user_all,
+        unique_cells_local_index_collection,
+        samples,
+        dirty_files_name,
+        clean_files_name,
+        final_result_df
+    )
+    
+    logging.info(f"Number of user labeled cells: {global_n_userl_labels}")
+    
     return (y_test_all, y_local_cell_ids, predicted_all, y_labeled_by_user_all,
             unique_cells_local_index_collection, samples, global_n_userl_labels)

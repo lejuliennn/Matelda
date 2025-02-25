@@ -4,6 +4,7 @@ import ipywidgets as widgets
 from IPython.display import display, clear_output, HTML, Javascript
 import pickle
 import pandas as pd
+import hashlib
 
 def configparser_to_dict(config):
     """
@@ -323,3 +324,204 @@ def create_cell_fold_accordion(configs):
         outer_accordion.set_title(idx, f"Cell Fold {key}")
     
     return outer_accordion
+
+def create_sample_row(sample_key, sample_val, configs):
+    """
+    Create a row for a single sample with two buttons.
+    The sample key is expected to be a tuple of the form:
+      (table_hash, column_id, row_id)
+    where table_hash is the MD5 hash of "foldername.csv".
+    
+    This function uses the hash to determine the table (folder) name, opens the corresponding
+    dirty CSV file from that folder, and then retrieves the cell value by looking up the row
+    with a matching 'tuple_id' (if available) and using the provided column index.
+    
+    The sample information is displayed in a scrollable HTML widget.
+    """
+
+    # Determine the configuration object.
+    config_obj = configs["configs"] if "configs" in configs else configs
+
+    # Access the "DIRECTORIES" section.
+    sandbox_dir = config_obj["DIRECTORIES"]["sandbox_dir"]
+    tables_dir = config_obj["DIRECTORIES"]["tables_dir"]
+    datasets_table_path = os.path.join(sandbox_dir, tables_dir)
+    
+    # Build a dictionary mapping MD5 hash of "foldername.csv" to the folder name.
+    hash_dict = {}
+    for entry in os.listdir(datasets_table_path):
+        entry_path = os.path.join(datasets_table_path, entry)
+        if os.path.isdir(entry_path):
+            csv_string = f"{entry}.csv"
+            file_hash = hashlib.md5(csv_string.encode('utf-8')).hexdigest()
+            hash_dict[file_hash] = entry  # folder name as table name
+
+    # Extract the inner key from sample_val if available; otherwise use sample_key.
+    if isinstance(sample_val, dict) and len(sample_val) > 0:
+        inner_key = list(sample_val.keys())[0]
+    else:
+        inner_key = sample_key
+
+    # Expect the inner key to be a tuple: (file_hash, column_id, row_id)
+    if isinstance(inner_key, tuple) and len(inner_key) >= 3:
+        file_hash = inner_key[0]
+        col_idx = inner_key[1]
+        row_id = inner_key[2]
+    else:
+        file_hash = inner_key
+        col_idx, row_id = None, None
+
+    # Look up the table (folder) name using the hash dictionary.
+    table_name = hash_dict.get(file_hash, file_hash)
+
+    # Now, open the corresponding dirty CSV from that table folder and retrieve the cell value.
+    cell_value = "N/A"
+    folder_path = os.path.join(datasets_table_path, table_name)
+    # Use the dirty file name from the configuration (default to "dirty.csv")
+    dirty_filename = config_obj["DIRECTORIES"].get("dirty_files_name", "dirty.csv")
+    dirty_csv_path = os.path.join(folder_path, dirty_filename)
+    
+    try:
+        df = pd.read_csv(dirty_csv_path)
+        # If the dataframe has a 'tuple_id' column, use it to locate the correct row.
+        if 'tuple_id' in df.columns and pd.api.types.is_numeric_dtype(df['tuple_id']):
+            # Ensure the tuple_id column is numeric
+            df['tuple_id'] = pd.to_numeric(df['tuple_id'], errors='coerce')
+            matching = df[df['tuple_id'] == row_id]
+            if not matching.empty:
+                row_data = matching.iloc[0]
+                try:
+                    cell_value = row_data.iloc[col_idx]
+                except Exception as e:
+                    cell_value = f"Error (col lookup): {e}"
+            else:
+                cell_value = f"Row id {row_id} not found"
+        else:
+            # Otherwise, assume row_id is a direct row index.
+            cell_value = df.iloc[row_id, col_idx]
+    except Exception as e:
+        cell_value = f"Error: {e}"
+
+    # Build the sample string showing table name and cell value.
+    sample_str = (f"Sample {sample_key}: Table: {table_name} | "
+                  f"Cell Value: {cell_value} | Sample Value: {sample_val}")
+    html_str = f"<div style='width:600px; overflow:auto;'>{sample_str}</div>"
+    label = widgets.HTML(value=html_str)
+
+    # Create two buttons: True (default selected) and False.
+    btn_true = widgets.Button(
+        description="True", 
+        button_style="success",
+        layout=widgets.Layout(width='100px')
+    )
+    btn_false = widgets.Button(
+        description="False", 
+        button_style="",
+        layout=widgets.Layout(width='100px')
+    )
+
+    state = {"value": True}
+
+    def on_true_click(b):
+        if state["value"] is not True:
+            state["value"] = True
+            btn_true.button_style = "success"
+            btn_false.button_style = ""
+
+    def on_false_click(b):
+        if state["value"] is not False:
+            state["value"] = False
+            btn_true.button_style = ""
+            btn_false.button_style = "danger"
+
+    btn_true.on_click(on_true_click)
+    btn_false.on_click(on_false_click)
+
+    row = widgets.HBox([label, btn_true, btn_false])
+    return row, state
+
+
+def create_domain_fold_widget(fold_id, samples, configs):
+    """
+    Create the UI for a single domain fold.
+    The header row displays fixed button headers (as column headers).
+    Each sample row shows its description plus two mutually exclusive buttons.
+    """
+    # Header row with disabled buttons as column headers.
+    header = widgets.HBox([
+        widgets.Label("Sample", layout=widgets.Layout(width='300px')),
+        widgets.Button(description="True", disabled=True, button_style="success", layout=widgets.Layout(width='100px')),
+        widgets.Button(description="False", disabled=True, button_style="danger", layout=widgets.Layout(width='100px'))
+    ])
+    
+    # Create sample rows.
+    sample_rows = []
+    # This dict will hold the state for each sample in this fold.
+    sample_states = {}
+    for sample_key, sample_val in samples.items():
+        row, state = create_sample_row(sample_key, sample_val, configs)
+        sample_rows.append(row)
+        sample_states[sample_key] = state
+    # Pack the header and sample rows together.
+    fold_widget = widgets.VBox([header] + sample_rows)
+    return fold_widget, sample_states
+
+def display_labeling_widget(domain_fold_samples, configs):
+    """
+    Build the overall labeling UI using an outer accordion.
+    Each accordion panel corresponds to one domain fold.
+    The content of each panel (built using create_domain_fold_widget) is loaded lazily.
+    On submission, the current state for each sample is stored back into the domain_fold_samples dictionary.
+    """
+    # Sorted list of fold IDs.
+    fold_ids = sorted(domain_fold_samples.keys())
+    # Create a placeholder (empty output) for each fold.
+    placeholders = [widgets.Output() for _ in fold_ids]
+    outer_accordion = widgets.Accordion(children=placeholders)
+    for idx, fold_id in enumerate(fold_ids):
+        outer_accordion.set_title(idx, f"Domain Fold {fold_id}")
+    
+    # Dictionary to hold the loaded sample state dictionaries per fold.
+    loaded_folds = {}  # key: accordion index, value: sample_states dict
+
+    def on_accordion_change(change):
+        new_index = change.get("new")
+        if new_index is not None and new_index not in loaded_folds:
+            fold_id = fold_ids[new_index]
+            samples = domain_fold_samples[fold_id]
+            fold_widget, sample_states = create_domain_fold_widget(fold_id, samples, configs)
+            loaded_folds[new_index] = sample_states
+            # Replace the placeholder content with the fold widget.
+            placeholder = outer_accordion.children[new_index]
+            placeholder.clear_output()
+            with placeholder:
+                display(fold_widget)
+    
+    outer_accordion.observe(on_accordion_change, names="selected_index")
+    
+    # Create a submit button and an output area.
+    submit_button = widgets.Button(description="Submit Labels", button_style="success")
+    submit_output = widgets.Output()
+    
+    def on_submit_clicked(b):
+        # Update each fold's samples with the current state from the corresponding button pair.
+        for index, sample_states in loaded_folds.items():
+            fold_id = fold_ids[index]
+            for sample_key, state in sample_states.items():
+                new_label = state["value"]
+                old_entry = domain_fold_samples[fold_id][sample_key]
+                if isinstance(old_entry, (list, tuple)):
+                    # Replace the third element with the new label.
+                    domain_fold_samples[fold_id][sample_key] = (old_entry[0], old_entry[1], new_label)
+                elif isinstance(old_entry, dict):
+                    old_entry['label'] = new_label
+                else:
+                    domain_fold_samples[fold_id][sample_key] = new_label
+        with submit_output:
+            clear_output()
+            print("Labels submitted successfully!")
+    
+    submit_button.on_click(on_submit_clicked)
+    
+    ui = widgets.VBox([outer_accordion, submit_button, submit_output])
+    return ui, domain_fold_samples
