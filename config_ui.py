@@ -325,6 +325,38 @@ def create_cell_fold_accordion(configs):
     
     return outer_accordion
 
+def move_label_into_tuple(domain_fold_samples):
+    """
+    For each domain fold and subkey, if there's a 'label' entry
+    (True/False) and a tuple key that maps to (cell_group_id, sample_index, None),
+    replace the None with the label value and remove the 'label' key.
+
+    Modifies the dictionary in place and also returns it.
+    """
+    for domain_fold_id, fold_dict in domain_fold_samples.items():
+        for subkey, subdict in fold_dict.items():
+            # subdict should contain exactly one tuple key and possibly 'label'
+            tuple_key = None
+            # Find the tuple key
+            for k in subdict:
+                if isinstance(k, tuple):
+                    tuple_key = k
+                    break
+
+            if tuple_key is not None and 'label' in subdict:
+                label_val = subdict['label']
+                # old tuple is e.g. (0, 0, None)
+                old_tuple = subdict[tuple_key]
+                if len(old_tuple) == 3:
+                    # Replace the third element with the label
+                    new_tuple = (old_tuple[0], old_tuple[1], label_val)
+                    subdict[tuple_key] = new_tuple
+                # Remove the 'label' key
+                del subdict['label']
+
+    return domain_fold_samples
+
+
 def create_sample_row(sample_key, sample_val, configs):
     """
     Create a vertical layout:
@@ -506,19 +538,25 @@ def display_labeling_widget(domain_fold_samples, configs):
     submit_output = widgets.Output()
     
     def on_submit_clicked(b):
-        # Update each fold's samples with the current state from the corresponding button pair.
         for index, sample_states in loaded_folds.items():
             fold_id = fold_ids[index]
             for sample_key, state in sample_states.items():
                 new_label = state["value"]
                 old_entry = domain_fold_samples[fold_id][sample_key]
+                # If the old entry is a tuple (or list), update the third element.
                 if isinstance(old_entry, (list, tuple)):
-                    # Replace the third element with the new label.
                     domain_fold_samples[fold_id][sample_key] = (old_entry[0], old_entry[1], new_label)
+                # If it was stored as a dict with a separate 'label' key,
+                # you could either update it and then later call move_label_into_tuple,
+                # or simply replace it as above.
                 elif isinstance(old_entry, dict):
+                    # Option 1: Update the dict and then move the label into the tuple later:
                     old_entry['label'] = new_label
                 else:
                     domain_fold_samples[fold_id][sample_key] = new_label
+        # Optionally, call a helper that transforms any dict entries into tuple entries:
+        move_label_into_tuple(domain_fold_samples)
+        
         with submit_output:
             clear_output()
             print("Labels submitted successfully!")
